@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Cosmic Hand Particles | WebGL Interactive</title>
+    <style>
+        :root {
+            --glass-bg: rgba(20, 20, 25, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --accent: #00f0ff;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: white;
+            user-select: none;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+        }
+        /* Hidden video element for MediaPipe */
+        #input-video {
+            position: absolute;
+            top: 0; left: 0;
+            opacity: 0;
+            pointer-events: none;
+            z-index: -1;
+        }
+        
+        /* UI Layer */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            padding: 24px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .hud-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 16px;
+            pointer-events: auto;
+            max-width: 300px;
+            transition: transform 0.3s ease;
+        }
+
+        .hud-top-right {
+            position: absolute;
+            top: 24px; right: 24px;
+            display: flex;
+            gap: 12px;
+        }
+
+        .icon-btn {
+            width: 44px; height: 44px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        .icon-btn:hover { background: rgba(255,255,255,0.1); transform: scale(1.05); }
+        .icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+        .status-text {
+            font-size: 12px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.6);
+            margin-bottom: 4px;
+        }
+        .active-mode {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--accent);
+            text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.5s;
+        }
+        .loader {
+            width: 48px; height: 48px;
+            border: 3px solid #FFF;
+            border-radius: 50%;
+            display: inline-block;
+            position: relative;
+            box-sizing: border-box;
+            animation: rotation 1s linear infinite;
+        }
+        .loader::after {
+            content: '';  
+            box-sizing: border-box;
+            position: absolute;
+            left: 50%; top: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            border: 3px solid transparent;
+            border-bottom-color: var(--accent);
+        }
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://esm.sh/three@0.160.0",
+            "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/",
+            "@mediapipe/hands": "https://esm.sh/@mediapipe/hands@0.4.1675469240",
+            "@mediapipe/camera_utils": "https://esm.sh/@mediapipe/camera_utils@0.3.1675466862",
+            "gsap": "https://esm.sh/gsap@3.12.5"
+        }
+    }
+    </script>
+</head>
+<body>
+
+    <div class="loading-overlay" id="loader">
+        <div class="loader"></div>
+        <p style="margin-top: 20px; font-size: 14px; opacity: 0.7;">INITIALIZING NEURAL NETWORKS...</p>
+    </div>
+
+    <video id="input-video" playsinline></video>
+    <div id="canvas-container"></div>
+
+    <div id="ui-layer">
+        <div class="hud-panel">
+            <div class="status-text">SYSTEM STATUS</div>
+            <div class="active-mode" id="system-status">IDLE</div>
+            <div style="margin-top: 10px; font-size: 12px; color: #888;">
+                FPS: <span id="fps-counter">0</span> | Particles: 12,000
+            </div>
+            <div style="margin-top: 8px; height: 2px; background: rgba(255,255,255,0.1); width: 100%;">
+                <div id="gesture-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.1s;"></div>
+            </div>
+        </div>
+
+        <div class="hud-top-right">
+            <button class="icon-btn" id="fs-btn">
+                <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            </button>
+        </div>
+
+        <div class="hud-panel" style="align-self: flex-end; text-align: right;">
+            <div class="status-text">INTERACTION GUIDE</div>
+            <div style="font-size: 13px; line-height: 1.5;">
+                ✊ <b>FIST:</b> Gravitational Collapse<br>
+                🖐 <b>OPEN:</b> Supernova Explosion<br>
+                ↔ <b>HANDS:</b> Scale Control
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { Hands } from '@mediapipe/hands';
+        import { Camera } from '@mediapipe/camera_utils';
+        import gsap from 'gsap';
+
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            particleCount: 12000,
+            particleSize: 2.0,
+            colors: {
+                idle: new THREE.Color('#00f0ff'),
+                blackHoleCore: new THREE.Color('#220044'),
+                blackHoleRim: new THREE.Color('#001133'),
+                novaCore: new THREE.Color('#ffaa00'),
+                novaRim: new THREE.Color('#ff0033')
+            },
+            physics: {
+                G: 300,
+                friction: 0.96,
+                returnSpeed: 0.03
+            }
+        };
+
+        // --- GLOBAL VARIABLES ---
+        let scene, camera, renderer, composer;
+        let particles, geometry, material;
+        let positions, velocities, initialPositions, colors; // Float32Arrays
+        let handLandmarks = [];
+        let gestureState = 'IDLE'; // IDLE, BLACK_HOLE, SUPERNOVA
+        let gestureTimer = 0;
+        let bloomPass;
+        
+        // Interaction State
+        const interaction = {
+            targetScale: 1.0,
+            currentScale: 1.0,
+            handPos: new THREE.Vector3(0, 0, 0),
+            handRotation: 0,
+            smoothHandPos: new THREE.Vector3(0, 0, 0),
+            smoothHandRot: 0
+        };
+
+        // --- SHADER DEFINITIONS ---
+        const vertexShader = `
+            uniform float uTime;
+            uniform float uScale;
+            attribute vec3 color;
+            attribute float sizeOffset;
+            varying vec3 vColor;
+            
+            void main() {
+                vColor = color;
+                vec3 pos = position;
+                
+                // Subtle breathing animation
+                float noise = sin(pos.x * 2.0 + uTime) * cos(pos.y * 1.5 + uTime) * 0.1;
+                pos += normal * noise;
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos * uScale, 1.0);
+                
+                // Size attenuation
+                gl_PointSize = (4.0 + sizeOffset) * (300.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        const fragmentShader = `
+            varying vec3 vColor;
+            
+            void main() {
+                // Circular particle
+                vec2 xy = gl_PointCoord.xy - vec2(0.5);
+                float ll = length(xy);
+                if (ll > 0.5) discard;
+                
+                // Soft glow edge
+                float alpha = (0.5 - ll) * 2.0;
+                alpha = pow(alpha, 1.5); // sharpen slightly
+                
+                gl_FragColor = vec4(vColor, alpha);
+            }
+        `;
+
+        // --- INITIALIZATION ---
+        function init() {
+            // 1. Scene Setup
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050505, 0.002);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 100;
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x050505);
+            container.appendChild(renderer.domElement);
+
+            // 2. Post Processing
+            const renderScene = new RenderPass(scene, camera);
+            bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0;
+            bloomPass.strength = 1.2;
+            bloomPass.radius = 0.5;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            // 3. Particle System Construction
+            createParticles();
+
+            // 4. Events
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('fs-btn').addEventListener('click', toggleFullScreen);
+
+            // 5. Start Loops
+            initMediaPipe();
+            animate();
+        }
+
+        function createParticles() {
+            geometry = new THREE.BufferGeometry();
+            
+            positions = new Float32Array(CONFIG.particleCount * 3);
+            initialPositions = new Float32Array(CONFIG.particleCount * 3);
+            velocities = new Float32Array(CONFIG.particleCount * 3);
+            colors = new Float32Array(CONFIG.particleCount * 3);
+            const sizeOffsets = new Float32Array(CONFIG.particleCount);
+
+            const color1 = new THREE.Color(0x00f0ff);
+            const color2 = new THREE.Color(0x5500ff);
+
+            for (let i = 0; i < CONFIG.particleCount; i++) {
+                // Sphere distribution
+                const r = 40 + Math.random() * 40;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+
+                const x = r * Math.sin(phi) * Math.cos(theta);
+                const y = r * Math.sin(phi) * Math.sin(theta);
+                const z = r * Math.cos(phi);
+
+                positions[i * 3] = x;
+                positions[i * 3 + 1] = y;
+                positions[i * 3 + 2] = z;
+
+                initialPositions[i * 3] = x;
+                initialPositions[i * 3 + 1] = y;
+                initialPositions[i * 3 + 2] = z;
+
+                // Mixed colors
+                const mixedColor = color1.clone().lerp(color2, Math.random());
+                colors[i * 3] = mixedColor.r;
+                colors[i * 3 + 1] = mixedColor.g;
+                colors[i * 3 + 2] = mixedColor.b;
+
+                sizeOffsets[i] = Math.random() * 2.0;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('sizeOffset', new THREE.BufferAttribute(sizeOffsets, 1));
+
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uScale: { value: 1.0 }
+                },
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+        }
+
+        // --- GESTURE LOGIC & MEDIAPIPE ---
+        function initMediaPipe() {
+            const videoElement = document.getElementById('input-video');
+            
+            const hands = new Hands({locateFile: (file) => {
+                return `https://esm.sh/@mediapipe/hands@0.4.1675469240/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandsResults);
+
+            const cam = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+            cam.start().then(() => {
+                document.getElementById('loader').style.opacity = 0;
+                setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
+            });
+        }
+
+        function onHandsResults(results) {
+            handLandmarks = results.multiHandLandmarks;
+            processGestures();
+        }
+
+        function getDistance(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        function processGestures() {
+            const statusEl = document.getElementById('system-status');
+            const barEl = document.getElementById('gesture-bar');
+
+            if (!handLandmarks || handLandmarks.length === 0) {
+                gestureState = 'IDLE';
+                statusEl.innerText = "IDLE (NO HANDS)";
+                barEl.style.width = '0%';
+                
+                // Reset Interaction
+                interaction.targetScale = 1.0;
+                return;
+            }
+
+            // --- 1. Interaction Controls (Hands Logic) ---
+            if (handLandmarks.length === 2) {
+                // Dual hands: Scale control based on distance between palms
+                const h1 = handLandmarks[0][0]; // Wrist
+                const h2 = handLandmarks[1][0];
+                const dist = getDistance(h1, h2);
+                
+                // Map distance 0.2-0.8 to scale 0.5-2.0
+                interaction.targetScale = THREE.MathUtils.mapLinear(dist, 0.2, 0.8, 0.5, 2.0);
+                interaction.targetScale = THREE.MathUtils.clamp(interaction.targetScale, 0.4, 2.5);
+                statusEl.innerText = "SCALING";
+            } else {
+                interaction.targetScale = 1.0;
+            }
+
+            // Single Hand Controls (Right hand usually, or first detected)
+            const hand = handLandmarks[0];
+            const wrist = hand[0];
+            const middleTip = hand[12];
+            
+            // Map Hand position to Scene position (roughly)
+            // MediaPipe: x [0,1] left->right, y [0,1] top->bottom
+            // ThreeJS: x [-W, W], y [H, -H]
+            const nX = (wrist.x - 0.5) * 2; // -1 to 1
+            const nY = -(wrist.y - 0.5) * 2; // -1 to 1
+            
+            interaction.handPos.set(nX * 50, nY * 30, 0); // Multiplier for world range
+            
+            // Rotation based on wrist tilt (simplified via x diff of wrist vs middle base)
+            interaction.handRotation = nX * 0.5; // Simple tilt mapping
+
+            // --- 2. Gesture Detection ---
+            const palm = hand[0];
+            const fingertips = [8, 12, 16, 20]; // Index, Middle, Ring, Pinky tips
+            
+            // Detect FIST (Average distance from tips to wrist/palm center is small)
+            let avgDistToPalm = 0;
+            fingertips.forEach(idx => {
+                avgDistToPalm += getDistance(hand[idx], palm);
+            });
+            avgDistToPalm /= 4;
+
+            // Detect OPEN (Thumb to Pinky distance large + fingers extended)
+            const thumbTip = hand[4];
+            const pinkyTip = hand[20];
+            const spreadDist = getDistance(thumbTip, pinkyTip);
+
+            const now = Date.now();
+
+            if (avgDistToPalm < 0.15) { // Threshold adjusted for normalized coords
+                if (gestureState !== 'BLACK_HOLE') {
+                    if (now - gestureTimer > 300) { // Debounce
+                        triggerBlackHole();
+                        gestureTimer = now;
+                    }
+                }
+                statusEl.innerText = "SINGULARITY DETECTED";
+                barEl.style.width = '100%';
+                barEl.style.backgroundColor = '#5500ff';
+            } else if (spreadDist > 0.45) {
+                if (gestureState !== 'SUPERNOVA') {
+                    if (now - gestureTimer > 200) {
+                        triggerSupernova();
+                        gestureTimer = now;
+                    }
+                }
+                statusEl.innerText = "ENERGY CRITICAL";
+                barEl.style.width = '100%';
+                barEl.style.backgroundColor = '#ffaa00';
+            } else {
+                if (gestureState !== 'IDLE' && now - gestureTimer > 1000) {
+                    // Return to IDLE after effect finishes
+                     triggerIdle();
+                }
+            }
+        }
+
+        // --- STATE TRIGGERS ---
+        function triggerBlackHole() {
+            if (gestureState === 'BLACK_HOLE') return;
+            gestureState = 'BLACK_HOLE';
+            
+            // GSAP Transitions
+            gsap.to(bloomPass, { strength: 3.5, duration: 1.2, ease: "power2.in" });
+            gsap.to(material.uniforms.uScale, { value: 0.4, duration: 1.2, ease: "expo.in" });
+            
+            // Color Transition
+            fadeColors(CONFIG.colors.blackHoleRim, CONFIG.colors.blackHoleCore);
+        }
+
+        function triggerSupernova() {
+            if (gestureState === 'SUPERNOVA') return;
+            gestureState = 'SUPERNOVA';
+
+            // Sequence: Implode -> Explode
+            const tl = gsap.timeline();
+            
+            // 1. Gather (Implode)
+            tl.to(material.uniforms.uScale, { value: 0.1, duration: 0.3, ease: "power2.in" });
+            
+            // 2. Explode
+            tl.to(bloomPass, { strength: 5.0, duration: 0.1 });
+            tl.to(material.uniforms.uScale, { 
+                value: 2.5, 
+                duration: 0.8, 
+                ease: "elastic.out(1, 0.5)",
+                onStart: () => {
+                    explodeParticles(); // Physics kick
+                    fadeColors(CONFIG.colors.novaRim, CONFIG.colors.novaCore);
+                }
+            });
+            tl.to(bloomPass, { strength: 1.2, duration: 2.0 });
+        }
+
+        function triggerIdle() {
+            gestureState = 'IDLE';
+            gsap.to(bloomPass, { strength: 1.2, duration: 1.5 });
+            gsap.to(material.uniforms.uScale, { value: 1.0, duration: 1.5 });
+            
+            // Restore colors
+            const c = CONFIG.colors.idle;
+            const colorsArr = geometry.attributes.color.array;
+            // Slow lerp back would be expensive in loop, so we re-generate or keep as is? 
+            // Let's just tween a global color mix factor if using uniforms, 
+            // but since we use attributes, let's just leave them modified or slowly revert in loop.
+            // For simplicity/perf, we won't perfectly revert colors instantly.
+        }
+
+        function fadeColors(cOuter, cInner) {
+            // Expensive operation, do once per trigger
+            const arr = geometry.attributes.color.array;
+            for(let i=0; i<CONFIG.particleCount; i++) {
+                const isCore = Math.random() > 0.5;
+                const target = isCore ? cInner : cOuter;
+                // Simple set for immediate reaction, normally would interpolate
+                arr[i*3] = target.r;
+                arr[i*3+1] = target.g;
+                arr[i*3+2] = target.b;
+            }
+            geometry.attributes.color.needsUpdate = true;
+        }
+
+        function explodeParticles() {
+            // Give massive radial velocity
+            for(let i=0; i<CONFIG.particleCount; i++) {
+                const ix = i*3, iy = i*3+1, iz = i*3+2;
+                const vx = positions[ix] - 0; // Center 0
+                const vy = positions[iy] - 0;
+                const vz = positions[iz] - 0;
+                
+                // Normalize
+                const len = Math.sqrt(vx*vx + vy*vy + vz*vz) + 0.001;
+                const speed = 3.0 + Math.random() * 5.0; // Explosion force
+                
+                velocities[ix] = (vx/len) * speed;
+                velocities[iy] = (vy/len) * speed;
+                velocities[iz] = (vz/len) * speed;
+            }
+        }
+
+        // --- PHYSICS LOOP ---
+        function updatePhysics() {
+            const positionsArr = geometry.attributes.position.array;
+            
+            // Interaction Smoothing
+            interaction.currentScale = THREE.MathUtils.lerp(interaction.currentScale, interaction.targetScale, 0.1);
+            interaction.smoothHandPos.lerp(interaction.handPos, 0.1);
+            interaction.smoothHandRot = THREE.MathUtils.lerp(interaction.smoothHandRot, interaction.handRotation, 0.1);
+
+            // Center of gravity (Hand position)
+            const cx = interaction.smoothHandPos.x;
+            const cy = interaction.smoothHandPos.y;
+            const cz = interaction.smoothHandPos.z;
+
+            for (let i = 0; i < CONFIG.particleCount; i++) {
+                const px = i * 3;
+                const py = i * 3 + 1;
+                const pz = i * 3 + 2;
+
+                let x = positionsArr[px];
+                let y = positionsArr[py];
+                let z = positionsArr[pz];
+
+                let vx = velocities[px];
+                let vy = velocities[py];
+                let vz = velocities[pz];
+
+                if (gestureState === 'BLACK_HOLE') {
+                    // F = G / r^2
+                    const dx = cx - x;
+                    const dy = cy - y;
+                    const dz = cz - z;
+                    const distSq = dx*dx + dy*dy + dz*dz + 1.0; // +1 avoids div/0
+                    const dist = Math.sqrt(distSq);
+                    
+                    const f = CONFIG.physics.G / distSq;
+                    
+                    // Pull to center
+                    vx += (dx / dist) * f * 0.1;
+                    vy += (dy / dist) * f * 0.1;
+                    vz += (dz / dist) * f * 0.1;
+
+                    // Tangential force (Cross product with up vector)
+                    // Creates swirl
+                    vx += -dz * 0.02;
+                    vz += dx * 0.02;
+
+                    // Friction/Drag high in black hole to prevent orbit chaos
+                    vx *= 0.92; 
+                    vy *= 0.92;
+                    vz *= 0.92;
+
+                } else if (gestureState === 'SUPERNOVA') {
+                    // Initial explosion handled in trigger, here we just add drag and noise
+                    vx *= 0.98;
+                    vy *= 0.98;
+                    vz *= 0.98;
+                    
+                    // Add some perlin-ish jitter
+                    vx += (Math.random()-0.5) * 0.2;
+                    vy += (Math.random()-0.5) * 0.2;
+                    vz += (Math.random()-0.5) * 0.2;
+
+                } else {
+                    // IDLE: Float back to initial positions relative to hand center
+                    const tx = initialPositions[px] * interaction.currentScale + cx;
+                    const ty = initialPositions[py] * interaction.currentScale + cy;
+                    const tz = initialPositions[pz] * interaction.currentScale + cz;
+
+                    const dx = tx - x;
+                    const dy = ty - y;
+                    const dz = tz - z;
+
+                    vx += dx * CONFIG.physics.returnSpeed * 0.5;
+                    vy += dy * CONFIG.physics.returnSpeed * 0.5;
+                    vz += dz * CONFIG.physics.returnSpeed * 0.5;
+
+                    // General Friction
+                    vx *= 0.90;
+                    vy *= 0.90;
+                    vz *= 0.90;
+                }
+
+                // Apply Velocity
+                x += vx;
+                y += vy;
+                z += vz;
+
+                // Update Arrays
+                positionsArr[px] = x;
+                positionsArr[py] = y;
+                positionsArr[pz] = z;
+                velocities[px] = vx;
+                velocities[py] = vy;
+                velocities[pz] = vz;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            
+            // Global Transform (Wrist Rotation)
+            particles.rotation.y = interaction.smoothHandRot;
+        }
+
+        // --- RENDER LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now() * 0.001;
+            material.uniforms.uTime.value = time;
+
+            updatePhysics();
+            
+            composer.render();
+
+            // FPS Monitor (rough)
+            if (Math.random() > 0.95) {
+                document.getElementById('fps-counter').innerText = Math.round(1000 / (performance.now() - (animate.lastTime || performance.now())));
+            }
+            animate.lastTime = performance.now();
+        }
+
+        // --- UTILS ---
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+        }
+
+        // Init App
+        init();
+
+    </script>
+</body>
+</html>
