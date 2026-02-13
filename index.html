@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Cosmic Hand Particles | WebGL Interactive</title>
+    
+    <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+    <script>try{new VConsole();}catch(e){}</script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+
     <style>
         :root {
             --glass-bg: rgba(20, 20, 25, 0.4);
@@ -23,18 +29,15 @@
             top: 0; left: 0; width: 100%; height: 100%;
             z-index: 1;
         }
-        /* Hidden video element for MediaPipe */
         #input-video {
             position: absolute;
             top: 0; left: 0;
             opacity: 0;
             pointer-events: none;
             z-index: -1;
-            /* Flip video horizontally for natural mirror effect */
             transform: scaleX(-1);
         }
         
-        /* UI Layer */
         #ui-layer {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -56,7 +59,6 @@
             padding: 16px;
             pointer-events: auto;
             max-width: 300px;
-            transition: transform 0.3s ease;
         }
 
         .hud-top-right {
@@ -77,17 +79,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.2s ease;
-        }
-        .icon-btn:hover { background: rgba(255,255,255,0.1); transform: scale(1.05); }
-        .icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
-
-        .status-text {
-            font-size: 12px;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            color: rgba(255,255,255,0.6);
-            margin-bottom: 4px;
+            pointer-events: auto;
         }
         .active-mode {
             font-size: 16px;
@@ -135,7 +127,6 @@
         "imports": {
             "three": "https://esm.sh/three@0.160.0",
             "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/",
-            "@mediapipe/hands": "https://esm.sh/@mediapipe/hands@0.4.1675469240",
             "gsap": "https://esm.sh/gsap@3.12.5"
         }
     }
@@ -145,7 +136,7 @@
 
     <div class="loading-overlay" id="loader">
         <div class="loader"></div>
-        <p style="margin-top: 20px; font-size: 14px; opacity: 0.7;">INITIALIZING SYSTEMS...</p>
+        <p id="loading-text" style="margin-top: 20px; font-size: 14px; opacity: 0.7;">INITIALIZING CORE...</p>
     </div>
 
     <video id="input-video" playsinline muted autoplay></video>
@@ -153,7 +144,7 @@
 
     <div id="ui-layer">
         <div class="hud-panel">
-            <div class="status-text">SYSTEM STATUS</div>
+            <div style="font-size: 12px; color: rgba(255,255,255,0.6);">SYSTEM STATUS</div>
             <div class="active-mode" id="system-status">IDLE</div>
             <div style="margin-top: 10px; font-size: 12px; color: #888;">
                 FPS: <span id="fps-counter">0</span> | Particles: 12,000
@@ -165,16 +156,16 @@
 
         <div class="hud-top-right">
             <button class="icon-btn" id="fs-btn">
-                <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:white;"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
             </button>
         </div>
 
         <div class="hud-panel" style="align-self: flex-end; text-align: right;">
-            <div class="status-text">INTERACTION GUIDE</div>
+            <div style="font-size: 12px; color: rgba(255,255,255,0.6);">INTERACTION GUIDE</div>
             <div style="font-size: 13px; line-height: 1.5;">
-                ✊ <b>FIST:</b> Gravitational Collapse<br>
-                🖐 <b>OPEN:</b> Supernova Explosion<br>
-                ↔ <b>HANDS:</b> Scale Control
+                ✊ <b>FIST:</b> Black Hole<br>
+                🖐 <b>OPEN:</b> Supernova<br>
+                ↔ <b>HANDS:</b> Scale
             </div>
         </div>
     </div>
@@ -184,11 +175,9 @@
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-        import { Hands } from '@mediapipe/hands';
-        // REMOVED: import { Camera } from '@mediapipe/camera_utils'; <-- This caused the error
         import gsap from 'gsap';
 
-        // --- CONFIGURATION ---
+        // --- 核心配置 ---
         const CONFIG = {
             particleCount: 12000,
             particleSize: 2.0,
@@ -205,7 +194,6 @@
             }
         };
 
-        // --- GLOBAL VARIABLES ---
         let scene, camera, renderer, composer;
         let particles, geometry, material;
         let positions, velocities, initialPositions, colors; 
@@ -214,7 +202,6 @@
         let gestureTimer = 0;
         let bloomPass;
         
-        // Interaction State
         const interaction = {
             targetScale: 1.0,
             currentScale: 1.0,
@@ -224,7 +211,6 @@
             smoothHandRot: 0
         };
 
-        // --- SHADER DEFINITIONS ---
         const vertexShader = `
             uniform float uTime;
             uniform float uScale;
@@ -235,14 +221,9 @@
             void main() {
                 vColor = color;
                 vec3 pos = position;
-                
-                // Subtle breathing animation
                 float noise = sin(pos.x * 2.0 + uTime) * cos(pos.y * 1.5 + uTime) * 0.1;
                 pos += normal * noise;
-
                 vec4 mvPosition = modelViewMatrix * vec4(pos * uScale, 1.0);
-                
-                // Size attenuation
                 gl_PointSize = (4.0 + sizeOffset) * (300.0 / -mvPosition.z);
                 gl_Position = projectionMatrix * mvPosition;
             }
@@ -250,22 +231,16 @@
 
         const fragmentShader = `
             varying vec3 vColor;
-            
             void main() {
-                // Circular particle
                 vec2 xy = gl_PointCoord.xy - vec2(0.5);
                 float ll = length(xy);
                 if (ll > 0.5) discard;
-                
-                // Soft glow edge
                 float alpha = (0.5 - ll) * 2.0;
                 alpha = pow(alpha, 1.5); 
-                
                 gl_FragColor = vec4(vColor, alpha);
             }
         `;
 
-        // --- INITIALIZATION ---
         function init() {
             const container = document.getElementById('canvas-container');
             scene = new THREE.Scene();
@@ -295,8 +270,7 @@
             window.addEventListener('resize', onWindowResize);
             document.getElementById('fs-btn').addEventListener('click', toggleFullScreen);
 
-            // Start logic
-            initMediaPipe();
+            initMediaPipe(); // 关键初始化
             animate();
         }
 
@@ -360,9 +334,21 @@
         // --- GESTURE LOGIC & CAMERA ---
         async function initMediaPipe() {
             const videoElement = document.getElementById('input-video');
+            const loadingText = document.getElementById('loading-text');
             
-            const hands = new Hands({locateFile: (file) => {
-                return `https://esm.sh/@mediapipe/hands@0.4.1675469240/${file}`;
+            // 检查全局变量 Hands 是否加载成功
+            if (typeof window.Hands === 'undefined') {
+                loadingText.innerText = "Error: MediaPipe JS Failed to Load";
+                console.error("MediaPipe Hands script not loaded");
+                return;
+            }
+
+            loadingText.innerText = "LOADING AI MODEL (20MB)...";
+
+            // 直接使用全局 Hands 对象
+            const hands = new window.Hands({locateFile: (file) => {
+                // 指向与 JS 版本一致的 CDN
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`;
             }});
 
             hands.setOptions({
@@ -374,7 +360,6 @@
 
             hands.onResults(onHandsResults);
 
-            // --- REPLACED Camera Utils with Native getUserMedia ---
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { 
@@ -385,7 +370,6 @@
                 });
                 videoElement.srcObject = stream;
                 
-                // Hide loader once camera starts
                 videoElement.onloadeddata = () => {
                     document.getElementById('loader').style.opacity = 0;
                     setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
@@ -394,16 +378,14 @@
 
             } catch (err) {
                 console.error("Camera Error:", err);
-                document.querySelector('#loader p').innerText = "CAMERA ERROR: Check Permissions";
+                loadingText.innerText = "CAMERA ERROR: " + err.message;
             }
         }
 
-        // Custom prediction loop
         let lastVideoTime = -1;
         async function predictWebcam(hands, videoElement) {
             if (lastVideoTime !== videoElement.currentTime) {
                 lastVideoTime = videoElement.currentTime;
-                // Only send data if video is playing
                 if (!videoElement.paused && !videoElement.ended) {
                     await hands.send({image: videoElement});
                 }
@@ -432,12 +414,10 @@
                 return;
             }
 
-            // Dual hands: Scale control
             if (handLandmarks.length === 2) {
                 const h1 = handLandmarks[0][0]; 
                 const h2 = handLandmarks[1][0];
                 const dist = getDistance(h1, h2);
-                
                 interaction.targetScale = THREE.MathUtils.mapLinear(dist, 0.2, 0.8, 0.5, 2.0);
                 interaction.targetScale = THREE.MathUtils.clamp(interaction.targetScale, 0.4, 2.5);
                 statusEl.innerText = "SCALING";
@@ -445,19 +425,14 @@
                 interaction.targetScale = 1.0;
             }
 
-            // Single Hand Controls
             const hand = handLandmarks[0];
             const wrist = hand[0];
-            
-            // Map Hand position to Scene position (Flip X because we mirrored video)
             const nX = (wrist.x - 0.5) * 2; 
             const nY = -(wrist.y - 0.5) * 2; 
             
-            // X is inverted for control feeling if we mirrored the video
             interaction.handPos.set(-nX * 50, nY * 30, 0); 
             interaction.handRotation = -nX * 0.5;
 
-            // Gesture Detection
             const palm = hand[0];
             const fingertips = [8, 12, 16, 20];
             
@@ -499,7 +474,6 @@
             }
         }
 
-        // --- STATE TRIGGERS ---
         function triggerBlackHole() {
             if (gestureState === 'BLACK_HOLE') return;
             gestureState = 'BLACK_HOLE';
@@ -530,7 +504,6 @@
             gestureState = 'IDLE';
             gsap.to(bloomPass, { strength: 1.2, duration: 1.5 });
             gsap.to(material.uniforms.uScale, { value: 1.0, duration: 1.5 });
-            // Colors remain until next trigger for performance/artistic choice
         }
 
         function fadeColors(cOuter, cInner) {
@@ -557,7 +530,6 @@
             }
         }
 
-        // --- PHYSICS LOOP ---
         function updatePhysics() {
             const positionsArr = geometry.attributes.position.array;
             
